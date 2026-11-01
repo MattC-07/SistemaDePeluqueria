@@ -1,4 +1,4 @@
-import { APPOINTMENTS, STYLISTS, getService, getStylistsForService } from "../data";
+import { APPOINTMENTS, STYLISTS, getService, getStylistsForService, type Appointment } from "../data";
 
 const MOCK_API_DELAY_MS = 300;
 const SLOT_HOLD_DURATION_MS = 5 * 60 * 1000;
@@ -9,6 +9,14 @@ const MOCK_CONFIRMATION_CONFLICT_PROBABILITY = 0.15;
 const SERVER_TIME_ZONE = "America/Bogota";
 const LUNCH_BREAK = { start: 13 * 60, end: 14 * 60 };
 const ANY_STYLIST_ID = "any";
+const SESSION_KEY_USER_NAME = "bb_user_name";
+
+export class AppointmentAccessError extends Error {
+  constructor(message = "No tienes permisos para consultar esta información.") {
+    super(message);
+    this.name = "AppointmentAccessError";
+  }
+}
 
 export interface AvailabilityRequest {
   serviceId: string;
@@ -81,6 +89,55 @@ interface MockReservation extends SlotHold {
 
 const reservations = new Map<string, MockReservation>();
 const expiredHoldIds = new Set<string>();
+
+// Lista de strings para probar HU-14/HS-02; debe conectarse con el backend en producción.
+const testAppointmentStrings: string[] = [
+  "test-upcoming-1|Juan García|s3|st1|2026-11-05|10:00|confirmed|2026-11-01T15:40:00-05:00",
+  "test-history-1|Juan García|s2|st3|2026-10-20|11:30|completed|2026-10-29T09:15:00-05:00",
+];
+
+const appointmentStatuses = new Set<Appointment["status"]>([
+  "confirmed",
+  "pending",
+  "cancelled",
+  "completed",
+]);
+
+function parseTestAppointment(value: string): Appointment | null {
+  const [id, clientName, serviceId, stylistId, date, time, status, createdAt] = value.split("|");
+  if (!id || !clientName || !serviceId || !stylistId || !date || !time || !appointmentStatuses.has(status as Appointment["status"])) {
+    return null;
+  }
+  return {
+    id,
+    clientName,
+    serviceId,
+    stylistId,
+    date,
+    time,
+    status: status as Appointment["status"],
+    ...(createdAt ? { createdAt } : {}),
+  };
+}
+
+function serializeTestAppointment(appointment: Appointment): string {
+  return [
+    appointment.id,
+    appointment.clientName,
+    appointment.serviceId,
+    appointment.stylistId,
+    appointment.date,
+    appointment.time,
+    appointment.status,
+    appointment.createdAt ?? new Date().toISOString(),
+  ].join("|");
+}
+
+function getTestAppointments(): Appointment[] {
+  return testAppointmentStrings
+    .map(parseTestAppointment)
+    .filter((appointment): appointment is Appointment => appointment !== null);
+}
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -420,3 +477,84 @@ export async function confirmReservation(
 }
 
 export const confirmBooking = confirmarReserva;
+
+function getAuthenticatedUserName(userName?: string): string {
+  const sessionUser = sessionStorage.getItem(SESSION_KEY_USER_NAME)?.trim();
+  if (!sessionUser || sessionStorage.getItem("bb_auth") !== "true" || (userName && userName.trim() !== sessionUser)) {
+    throw new AppointmentAccessError();
+  }
+  return sessionUser;
+}
+
+function assertAppointmentOwner(appointment: Appointment, userName?: string): void {
+  if (appointment.clientName !== getAuthenticatedUserName(userName)) {
+    throw new AppointmentAccessError();
+  }
+}
+
+export async function getMyAppointments(userName?: string): Promise<Appointment[]> {
+  const activeUser = getAuthenticatedUserName(userName);
+  await delay(MOCK_API_DELAY_MS);
+  return [...APPOINTMENTS, ...getTestAppointments()]
+    .filter(appointment => appointment.clientName === activeUser)
+    .sort((first, second) =>
+      `${second.date}T${second.time}`.localeCompare(`${first.date}T${first.time}`),
+    )
+    .map(appointment => ({ ...appointment }));
+}
+
+// Guarda en la lista de strings para probar el flujo; debe reemplazarse por una petición al backend.
+export function saveTestAppointment(input: {
+  id: string;
+  serviceId: string;
+  stylistId: string;
+  date: string;
+  time: string;
+  createdAt?: string;
+}): void {
+  const appointment: Appointment = {
+    id: input.id,
+    clientName: getAuthenticatedUserName(),
+    serviceId: input.serviceId,
+    stylistId: input.stylistId,
+    date: input.date,
+    time: input.time,
+    status: "confirmed",
+    createdAt: input.createdAt ?? new Date().toISOString(),
+  };
+  testAppointmentStrings.push(serializeTestAppointment(appointment));
+}
+
+export async function getMyAppointment(appointmentId: string, userName?: string): Promise<Appointment> {
+  if (!appointmentId.trim()) throw new AppointmentAccessError();
+  const activeUser = getAuthenticatedUserName(userName);
+  await delay(MOCK_API_DELAY_MS);
+  const appointment = [...APPOINTMENTS, ...getTestAppointments()].find(candidate => candidate.id === appointmentId);
+  if (!appointment || appointment.clientName !== activeUser) throw new AppointmentAccessError();
+  return { ...appointment };
+}
+
+export async function cancelMyAppointment(appointmentId: string, userName?: string): Promise<void> {
+  const appointment = [...APPOINTMENTS, ...getTestAppointments()].find(candidate => candidate.id === appointmentId);
+  if (!appointment) throw new AppointmentAccessError();
+  assertAppointmentOwner(appointment, userName);
+  await delay(MOCK_API_DELAY_MS);
+  const testAppointmentIndex = testAppointmentStrings.findIndex(value => value.startsWith(`${appointmentId}|`));
+  if (testAppointmentIndex >= 0) {
+    testAppointmentStrings[testAppointmentIndex] = serializeTestAppointment({
+      ...appointment,
+      status: "cancelled",
+    });
+    return;
+  }
+  const storedAppointment = APPOINTMENTS.find(candidate => candidate.id === appointmentId);
+  if (storedAppointment) storedAppointment.status = "cancelled";
+}
+
+export async function requestAppointmentReschedule(appointmentId: string, userName?: string): Promise<Appointment> {
+  const appointment = await getMyAppointment(appointmentId, userName);
+  if (appointment.status === "completed" || appointment.status === "cancelled") {
+    throw new Error("Esta cita no se puede reprogramar.");
+  }
+  return appointment;
+}

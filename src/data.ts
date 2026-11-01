@@ -37,6 +37,7 @@ export interface Appointment {
   time: string;
   status: AppointmentStatus;
   notes?: string;
+  createdAt?: string;
 }
 
 export interface BookingState {

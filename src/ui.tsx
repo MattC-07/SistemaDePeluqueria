@@ -1,4 +1,4 @@
-import { type ReactNode, type Ref, useState } from 'react';
+import { type ReactNode, type Ref, useEffect, useState } from 'react';
 import { CATEGORY_CONFIG, STATUS_CONFIG, type AppointmentStatus, type ServiceCategory } from './data';
 import { LANDING_SERVICE_IMAGES } from './mockData';
 
@@ -47,6 +47,164 @@ export function Button({ children, onClick, variant = 'primary', size = 'md', di
       {icon && <span className="shrink-0">{icon}</span>}
       {children}
     </button>
+  );
+}
+
+const ACCESSIBILITY_STORAGE_KEY = 'bb_accessibility_preferences';
+
+type ColorVisionMode = 'none' | 'protanopia' | 'deuteranopia' | 'tritanopia';
+
+interface AccessibilityPreferences {
+  largeText: boolean;
+  zoom: boolean;
+  magnifier: boolean;
+  highContrast: boolean;
+  darkMode: boolean;
+  invertColors: boolean;
+  colorVisionMode: ColorVisionMode;
+}
+
+const DEFAULT_ACCESSIBILITY_PREFERENCES: AccessibilityPreferences = {
+  largeText: false,
+  zoom: false,
+  magnifier: false,
+  highContrast: false,
+  darkMode: false,
+  invertColors: false,
+  colorVisionMode: 'none',
+};
+
+function readAccessibilityPreferences(): AccessibilityPreferences {
+  const stored = sessionStorage.getItem(ACCESSIBILITY_STORAGE_KEY);
+  if (!stored) return DEFAULT_ACCESSIBILITY_PREFERENCES;
+  const parsed = JSON.parse(stored) as Partial<AccessibilityPreferences>;
+  return {
+    ...DEFAULT_ACCESSIBILITY_PREFERENCES,
+    ...parsed,
+    colorVisionMode: ['none', 'protanopia', 'deuteranopia', 'tritanopia'].includes(parsed.colorVisionMode ?? '')
+      ? parsed.colorVisionMode as ColorVisionMode
+      : 'none',
+  };
+}
+
+export function resetAccessibilityPreferences(): void {
+  sessionStorage.removeItem(ACCESSIBILITY_STORAGE_KEY);
+  document.body.classList.remove(
+    'accessibility-large-text',
+    'accessibility-zoom',
+    'accessibility-magnifier',
+    'accessibility-high-contrast',
+    'accessibility-dark-mode',
+    'accessibility-invert',
+    'accessibility-color-vision',
+  );
+  delete document.body.dataset.colorVision;
+}
+
+export function AccessibilityWidget() {
+  const [open, setOpen] = useState(false);
+  const [preferences, setPreferences] = useState<AccessibilityPreferences>(readAccessibilityPreferences);
+
+  useEffect(() => {
+    sessionStorage.setItem(ACCESSIBILITY_STORAGE_KEY, JSON.stringify(preferences));
+    document.body.classList.toggle('accessibility-large-text', preferences.largeText);
+    document.body.classList.toggle('accessibility-zoom', preferences.zoom);
+    document.body.classList.toggle('accessibility-magnifier', preferences.magnifier);
+    document.body.classList.toggle('accessibility-high-contrast', preferences.highContrast);
+    document.body.classList.toggle('accessibility-dark-mode', preferences.darkMode);
+    document.body.classList.toggle('accessibility-invert', preferences.invertColors);
+    document.body.classList.toggle('accessibility-color-vision', preferences.colorVisionMode !== 'none');
+    document.body.dataset.colorVision = preferences.colorVisionMode;
+  }, [preferences]);
+
+  useEffect(() => {
+    const syncPreferences = (event: StorageEvent) => {
+      if (event.key === ACCESSIBILITY_STORAGE_KEY) {
+        setPreferences(readAccessibilityPreferences());
+      }
+    };
+    window.addEventListener('storage', syncPreferences);
+    return () => window.removeEventListener('storage', syncPreferences);
+  }, []);
+
+  const updatePreference = <K extends keyof AccessibilityPreferences>(
+    key: K,
+    value: AccessibilityPreferences[K],
+  ) => {
+    setPreferences(current => ({ ...current, [key]: value }));
+  };
+
+  return (
+    <div className="fixed bottom-5 right-5 z-[120]">
+      {open && (
+        <section
+          aria-label="Opciones de accesibilidad"
+          className="mb-3 w-72 rounded-2xl border-2 border-[#6B4226] bg-white p-4 shadow-2xl"
+        >
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-black text-[#6B4226]">Accesibilidad</h2>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Cerrar opciones de accesibilidad"
+              className="rounded-full px-2 text-xl text-[#6B4226] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#6B4226]"
+            >
+              ×
+            </button>
+          </div>
+          <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
+            <button type="button" aria-pressed={preferences.magnifier} onClick={() => updatePreference('magnifier', !preferences.magnifier)} className="accessibility-option">
+              {preferences.magnifier ? "✓ " : ""}Lupa
+            </button>
+            <button type="button" aria-pressed={preferences.highContrast} onClick={() => updatePreference('highContrast', !preferences.highContrast)} className="accessibility-option">
+              {preferences.highContrast ? "✓ " : ""}Contraste alto
+            </button>
+            <button type="button" aria-pressed={preferences.darkMode} onClick={() => updatePreference('darkMode', !preferences.darkMode)} className="accessibility-option">
+              {preferences.darkMode ? "✓ " : ""}Modo oscuro
+            </button>
+            <button type="button" aria-pressed={preferences.invertColors} onClick={() => updatePreference('invertColors', !preferences.invertColors)} className="accessibility-option">
+              {preferences.invertColors ? "✓ " : ""}Invertir colores
+            </button>
+            <button type="button" aria-pressed={preferences.zoom} onClick={() => updatePreference('zoom', !preferences.zoom)} className="accessibility-option">
+              {preferences.zoom ? "✓ " : ""}Agrandar toda la interfaz
+            </button>
+            <button
+              type="button"
+              aria-pressed={preferences.largeText}
+              onClick={() => updatePreference('largeText', !preferences.largeText)}
+              className="accessibility-option"
+            >
+              {preferences.largeText ? "✓ " : ""}Agrandar texto
+            </button>
+            <label htmlFor="color-vision-profile" className="text-xs font-bold text-[#6B4226]">Paleta para daltonismo</label>
+            <select id="color-vision-profile" value={preferences.colorVisionMode} onChange={event => updatePreference('colorVisionMode', event.target.value as ColorVisionMode)} className="accessibility-option">
+              <option value="none">Sin paleta</option>
+              <option value="protanopia">Protanopia (rojo)</option>
+              <option value="deuteranopia">Deuteranopia (verde)</option>
+              <option value="tritanopia">Tritanopia (azul)</option>
+            </select>
+            <a
+              href="https://wa.me/573123025035?text=Hola%2C%20necesito%20ayuda%20con%20mi%20reserva"
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-xl bg-[#168C4B] px-3 py-2 text-center text-sm font-bold text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#6B4226]"
+            >
+              Contactar por WhatsApp
+            </a>
+          </div>
+        </section>
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen(value => !value)}
+        aria-expanded={open}
+        aria-label={open ? "Cerrar accesibilidad" : "Abrir opciones de accesibilidad"}
+        className="flex h-14 w-14 items-center justify-center rounded-full bg-[#C45C4C] text-2xl text-white shadow-lg transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-4 focus-visible:outline-offset-2 focus-visible:outline-[#6B4226]"
+      >
+        <span aria-hidden="true">♿</span>
+      </button>
+      {preferences.magnifier && <div className="pointer-events-none fixed bottom-5 left-5 z-[120] rounded-full border-4 border-[#6B4226] bg-white/95 px-4 py-2 text-xs font-bold text-[#6B4226] shadow-lg">Lupa activa · mueve el cursor</div>}
+    </div>
   );
 }
 

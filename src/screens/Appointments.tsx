@@ -1,29 +1,111 @@
-import { useState } from 'react';
-import { APPOINTMENTS, SERVICES, STYLISTS, getService, getStylist, formatDate, formatDateShort, formatPrice, formatDuration, CATEGORY_CONFIG, STATUS_CONFIG, type Appointment, type AppointmentStatus } from '../data';
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import { getService, getStylist, formatDate, formatDateShort, formatPrice, formatDuration, CATEGORY_CONFIG, STATUS_CONFIG, type Appointment, type AppointmentStatus } from '../data';
 import { StatusBadge, Button, Card, PageHeader, EmptyState } from '../ui';
 import { EmptyAppointmentsIllustration, MemphisStylistAvatar } from '../illustrations';
+import { AppointmentAccessError, cancelMyAppointment, getMyAppointments, requestAppointmentReschedule } from '../services/bookingService';
 
 // ─── MY APPOINTMENTS ───────────────────────────────────────────────────────────
 
-export function MyAppointments({ onBook, onViewDetail, onCancel, onBack }: {
+export function MyAppointments({ onBook, onViewDetail, onReschedule, onCancel, onBack }: {
   onBook: () => void;
-  onViewDetail: (id: string) => void;
+  onViewDetail?: (id: string) => void;
+  onReschedule?: (appointmentId: string, serviceId: string) => void;
   onCancel?: (id: string) => void;
   onBack?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming');
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<'access' | 'generic' | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<'cancel' | 'reschedule' | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
 
-  const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+    getMyAppointments()
+      .then(result => { if (active) setAppointments(result); })
+      .catch(reason => {
+        if (!active) return;
+        setError(reason instanceof AppointmentAccessError ? 'access' : 'generic');
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
 
-  const upcoming = APPOINTMENTS.filter(a =>
-    a.date >= todayStr && (a.status === 'confirmed' || a.status === 'pending')
-  );
-  const past = APPOINTMENTS.filter(a =>
-    a.date < todayStr || a.status === 'completed' || a.status === 'cancelled'
-  );
-
+  const today = new Date().toISOString().split('T')[0];
+  const upcoming = appointments.filter(a => a.date >= today && (a.status === 'confirmed' || a.status === 'pending'));
+  const past = appointments.filter(a => a.date < today || a.status === 'completed' || a.status === 'cancelled');
   const list = activeTab === 'upcoming' ? upcoming : past;
+
+  useEffect(() => {
+    if (!selectedAppointment) return;
+    previouslyFocused.current = document.activeElement as HTMLElement;
+    const focusable = () => dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const first = focusable()?.[0];
+    first?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { setSelectedAppointment(null); return; }
+      if (event.key !== 'Tab') return;
+      const elements = focusable();
+      if (!elements?.length) return;
+      const firstElement = elements[0];
+      const lastElement = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault(); lastElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault(); firstElement.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused.current?.focus();
+    };
+  }, [selectedAppointment]);
+
+  const openDetail = (appointment: Appointment) => {
+    setActionError(null);
+    setSelectedAppointment(appointment);
+  };
+
+  const handleCancel = async () => {
+    if (!selectedAppointment) return;
+    setActionLoading('cancel'); setActionError(null);
+    try {
+      await cancelMyAppointment(selectedAppointment.id);
+      setAppointments(current => current.map(item =>
+        item.id === selectedAppointment.id ? { ...item, status: 'cancelled' } : item,
+      ));
+      onCancel?.(selectedAppointment.id);
+      setSelectedAppointment(null);
+    } catch (reason) {
+      setActionError(reason instanceof AppointmentAccessError
+        ? 'No tienes permisos para gestionar esta información.'
+        : 'No fue posible cancelar la cita. Inténtalo nuevamente.');
+    } finally { setActionLoading(null); }
+  };
+
+  const handleReschedule = async () => {
+    if (!selectedAppointment) return;
+    setActionLoading('reschedule'); setActionError(null);
+    try {
+      await requestAppointmentReschedule(selectedAppointment.id);
+      setSelectedAppointment(null);
+      if (onReschedule) onReschedule(selectedAppointment.id, selectedAppointment.serviceId);
+      else onViewDetail?.(selectedAppointment.id);
+    } catch (reason) {
+      setActionError(reason instanceof AppointmentAccessError
+        ? 'No tienes permisos para gestionar esta información.'
+        : 'No fue posible reprogramar la cita. Inténtalo nuevamente.');
+    } finally { setActionLoading(null); }
+  };
 
   return (
     <div className="flex flex-col h-full bg-[#FBF3E9]">
@@ -36,6 +118,11 @@ export function MyAppointments({ onBook, onViewDetail, onCancel, onBack }: {
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
+              role="tab"
+              aria-selected={activeTab === tab}
+              aria-controls={`${tab}-appointments-panel`}
+              id={`${tab}-appointments-tab`}
+              tabIndex={activeTab === tab ? 0 : -1}
               className={`
                 flex-1 py-3 text-sm font-bold transition-all duration-200 border-b-2
                 ${activeTab === tab
@@ -50,8 +137,17 @@ export function MyAppointments({ onBook, onViewDetail, onCancel, onBack }: {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 py-5 pb-24">
-        {list.length === 0 ? (
+      <div
+        id={`${activeTab}-appointments-panel`}
+        role="tabpanel"
+        aria-labelledby={`${activeTab}-appointments-tab`}
+        className="flex-1 overflow-y-auto px-5 py-5 pb-24"
+      >
+        {loading ? (
+          <AppointmentSkeletonList />
+        ) : error ? (
+          <SecureAppointmentsError accessDenied={error === 'access'} />
+        ) : list.length === 0 ? (
           <EmptyState
             illustration={<EmptyAppointmentsIllustration />}
             title={activeTab === 'upcoming' ? 'Sin citas próximas' : 'Sin historial aún'}
@@ -71,20 +167,30 @@ export function MyAppointments({ onBook, onViewDetail, onCancel, onBack }: {
               <AppointmentCard
                 key={appointment.id}
                 appointment={appointment}
-                onClick={() => onViewDetail(appointment.id)}
-                onCancel={activeTab === 'upcoming' && onCancel ? () => onCancel(appointment.id) : undefined}
+                onClick={() => openDetail(appointment)}
               />
             ))}
           </div>
         )}
       </div>
+      {selectedAppointment && (
+        <AppointmentDialog
+          appointment={selectedAppointment}
+          dialogRef={dialogRef}
+          actionError={actionError}
+          actionLoading={actionLoading}
+          onClose={() => setSelectedAppointment(null)}
+          onCancel={upcoming.some(item => item.id === selectedAppointment.id) ? handleCancel : undefined}
+          onReschedule={upcoming.some(item => item.id === selectedAppointment.id) ? handleReschedule : undefined}
+        />
+      )}
     </div>
   );
 }
 
 // ─── APPOINTMENT CARD ──────────────────────────────────────────────────────────
 
-function AppointmentCard({ appointment, onClick, onCancel }: { appointment: Appointment; onClick: () => void; onCancel?: () => void; }) {
+function AppointmentCard({ appointment, onClick }: { appointment: Appointment; onClick: () => void }) {
   const service = getService(appointment.serviceId);
   const stylist = getStylist(appointment.stylistId);
   if (!service || !stylist) return null;
@@ -94,9 +200,16 @@ function AppointmentCard({ appointment, onClick, onCancel }: { appointment: Appo
   const dayNum = dateObj.getDate();
   const month = dateObj.toLocaleDateString('es-ES', { month: 'short' });
   const dayName = dateObj.toLocaleDateString('es-ES', { weekday: 'short' });
+  const relativeCreatedAt = getRelativeTime(appointment.createdAt);
 
   return (
-    <Card onClick={onCancel ? undefined : onClick} padding={false}>
+    <Card padding={false}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="w-full text-left rounded-[20px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6B4226]"
+        aria-label={`Ver detalle de ${service.name}, ${dateObj.toLocaleDateString('es-ES')}`}
+      >
       <div className="p-4 flex items-start gap-3">
         {/* Date block */}
         <div className="flex-shrink-0 w-14 bg-[#FBF3E9] rounded-2xl flex flex-col items-center justify-center py-2 px-1">
@@ -111,6 +224,11 @@ function AppointmentCard({ appointment, onClick, onCancel }: { appointment: Appo
             <span className="font-black font-display text-[#6B4226] text-base leading-tight">{service.name}</span>
             <StatusBadge status={appointment.status} />
           </div>
+          {relativeCreatedAt && (
+            <p className="mt-1 text-[11px] font-semibold text-[#6B4226]">
+              Hace: {relativeCreatedAt}
+            </p>
+          )}
 
           <div className="flex items-center gap-2 mt-1.5">
             <MemphisStylistAvatar name={stylist.name} color={stylist.color} size={22} />
@@ -124,24 +242,99 @@ function AppointmentCard({ appointment, onClick, onCancel }: { appointment: Appo
           </div>
         </div>
       </div>
-      {onCancel && (
-        <div className="px-4 pb-4 flex gap-2">
-          <button
-            onClick={e => { e.stopPropagation(); onClick(); }}
-            className="flex-1 py-2 rounded-[12px] bg-[#FBF3E9] text-[#6B4226] text-xs font-bold hover:bg-[#F5E6D3] transition-colors cursor-pointer"
-          >
-            Ver detalle →
-          </button>
-          <button
-            onClick={e => { e.stopPropagation(); onCancel(); }}
-            className="flex-1 py-2 rounded-[12px] bg-[#FFF5F5] text-[#C45C4C] text-xs font-bold hover:bg-[#FFE8E8] transition-colors cursor-pointer border border-[#F0C0BE]"
-          >
-            Cancelar cita
-          </button>
-        </div>
-      )}
+      </button>
     </Card>
   );
+}
+
+function getRelativeTime(createdAt?: string): string | null {
+  if (!createdAt) return null;
+  const elapsedMilliseconds = Date.now() - new Date(createdAt).getTime();
+  if (!Number.isFinite(elapsedMilliseconds) || elapsedMilliseconds < 0) return "unos segundos";
+  const minutes = Math.floor(elapsedMilliseconds / 60_000);
+  if (minutes < 1) return "menos de un minuto";
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? "minuto" : "minutos"}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ${hours === 1 ? "hora" : "horas"}`;
+  const days = Math.floor(hours / 24);
+  return `${days} ${days === 1 ? "día" : "días"}`;
+}
+
+function AppointmentSkeletonList() {
+  return (
+    <div className="flex flex-col gap-3" aria-label="Cargando tus citas" aria-busy="true">
+      {[1, 2, 3].map(item => (
+        <div key={item} className="h-32 rounded-[20px] bg-white animate-pulse shadow-[0_4px_24px_-4px_rgba(107,66,38,0.12)]" />
+      ))}
+    </div>
+  );
+}
+
+function SecureAppointmentsError({ accessDenied }: { accessDenied: boolean }) {
+  return (
+    <div role="alert" className="rounded-[20px] bg-white p-6 text-center shadow-[0_4px_24px_-4px_rgba(107,66,38,0.12)]">
+      <p className="text-3xl mb-3" aria-hidden="true">🔒</p>
+      <h2 className="font-black text-[#6B4226] font-display">No podemos mostrar tus citas</h2>
+      <p className="mt-2 text-sm text-[#6B4226]">
+        {accessDenied ? 'No tienes permisos para consultar esta información.' : 'No fue posible cargar tus reservas. Inténtalo nuevamente.'}
+      </p>
+    </div>
+  );
+}
+
+function AppointmentDialog({
+  appointment, dialogRef, actionError, actionLoading, onClose, onCancel, onReschedule,
+}: {
+  appointment: Appointment;
+  dialogRef: RefObject<HTMLDivElement | null>;
+  actionError: string | null;
+  actionLoading: 'cancel' | 'reschedule' | null;
+  onClose: () => void;
+  onCancel?: () => void;
+  onReschedule?: () => void;
+}) {
+  const service = getService(appointment.serviceId);
+  const stylist = getStylist(appointment.stylistId);
+  if (!service || !stylist) return null;
+  const [year, month, day] = appointment.date.split('-').map(Number);
+  const formattedDate = new Date(year, month - 1, day).toLocaleDateString('es-ES', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  });
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#3D2415]/60 p-4" onMouseDown={event => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="appointment-dialog-title" className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-[24px] bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-[#A67850]">Reserva {appointment.id}</p>
+            <h2 id="appointment-dialog-title" className="mt-1 font-black font-display text-xl text-[#6B4226]">{service.name}</h2>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar detalle" className="rounded-full p-2 text-xl text-[#6B4226] hover:bg-[#FBF3E9] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#6B4226]">×</button>
+        </div>
+        <div className="mt-4"><StatusBadge status={appointment.status} /></div>
+        <dl className="mt-5 grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
+          <DetailItem label="Estilista" value={stylist.name} />
+          <DetailItem label="Servicio" value={service.name} />
+          <DetailItem label="Precio" value={formatPrice(service.price)} />
+          <DetailItem label="Fecha" value={formattedDate} />
+          <DetailItem label="Hora" value={appointment.time} />
+          <DetailItem label="Duración" value={formatDuration(service.duration)} />
+        </dl>
+        {actionError && <p role="alert" className="mt-4 rounded-xl bg-[#FFF5F5] p-3 text-sm font-semibold text-[#A84A3A]">{actionError}</p>}
+        {(onCancel || onReschedule) && (
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+            {onReschedule && <Button onClick={onReschedule} variant="secondary" fullWidth disabled={Boolean(actionLoading)}> {actionLoading === 'reschedule' ? 'Validando...' : 'Reprogramar'} </Button>}
+            {onCancel && <Button onClick={onCancel} variant="danger" fullWidth disabled={Boolean(actionLoading)}> {actionLoading === 'cancel' ? 'Cancelando...' : 'Cancelar'} </Button>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return <div><dt className="text-xs font-bold uppercase tracking-wide text-[#A67850]">{label}</dt><dd className="mt-1 font-semibold text-[#6B4226]">{value}</dd></div>;
 }
 
 // ─── APPOINTMENT DETAIL ────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router';
 import type { UserRole, BookingState } from './data';
 import { APPOINTMENTS } from './data';
-import { BottomNav, SideNav } from './ui';
+import { AccessibilityWidget, BottomNav, resetAccessibilityPreferences, SideNav } from './ui';
 
 // Onboarding
 import { LoginScreen, RegisterScreen, RoleSelectScreen, ForgotPasswordScreen, SplashScreen } from './screens/Onboarding';
@@ -176,6 +176,7 @@ export default function App() {
 
   const handleLogout = () => {
     setIsLoggedIn(false);
+    resetAccessibilityPreferences();
     sessionStorage.removeItem(SESSION_KEY_AUTH);
     sessionStorage.removeItem(SESSION_KEY_ROLE);
     sessionStorage.removeItem(SESSION_KEY_USER_NAME);
@@ -381,6 +382,7 @@ export default function App() {
           <MyAppointments
             onBook={() => startBooking()}
             onViewDetail={id => { setSelectedAppointmentId(id); nav('appointment-detail'); }}
+            onReschedule={(id, serviceId) => { setSelectedAppointmentId(id); startBooking(serviceId); }}
             onCancel={id => { setSelectedAppointmentId(id); nav('cancel-appointment'); }}
           />
         );
@@ -459,6 +461,7 @@ export default function App() {
           {renderScreen()}
         </div>
         <GlobalToast message={toastMessage} onDismiss={dismissToast} />
+        <AccessibilityWidget />
       </div>
     );
   }
@@ -471,6 +474,7 @@ export default function App() {
         </div>
         <GlobalToast message={toastMessage} onDismiss={dismissToast} />
         <BottomNav active={clientTab} onNavigate={handleClientTab} />
+        <AccessibilityWidget />
       </div>
     );
   }
@@ -479,6 +483,7 @@ export default function App() {
     <div className="h-full bg-[#FBF3E9] overflow-hidden">
       {renderScreen()}
       <GlobalToast message={toastMessage} onDismiss={dismissToast} />
+      <AccessibilityWidget />
     </div>
   );
 }

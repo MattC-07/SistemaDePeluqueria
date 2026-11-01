@@ -12,6 +12,7 @@ import {
   getDisponibilidad,
   liberarTurno,
   reservarTurno,
+  saveTestAppointment,
   type AvailableSlot,
   type SlotHold,
 } from '../services/bookingService';
@@ -717,6 +718,17 @@ export function BookStep4({ booking, onConfirm, onBack, onConflict, onChooseNewT
         estilistaId: booking.stylistId!,
         fecha: booking.date!,
         horaInicio: booking.time!,
+      });
+      // Prueba temporal: guarda la cita en una lista de strings; debe conectarse con el backend.
+      saveTestAppointment({
+        id: confirmation.reservationCode,
+        serviceId: booking.serviceId!,
+        stylistId: booking.stylistId === 'any'
+          ? getStylistsForService(booking.serviceId!)[0]?.id ?? booking.stylistId!
+          : booking.stylistId!,
+        date: booking.date!,
+        time: booking.time!,
+        createdAt: new Date().toISOString(),
       });
       onConfirm(confirmation.reservationCode);
     } catch (error) {
