@@ -107,6 +107,7 @@ export default function App() {
   const [booking, setBooking] = useState<BookingState>(INITIAL_BOOKING);
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
+  const [reschedulingAppointmentId, setReschedulingAppointmentId] = useState<string | null>(null);
   const [reservationCode, setReservationCode] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const dismissToast = useCallback(() => setToastMessage(null), []);
@@ -184,6 +185,7 @@ export default function App() {
   };
 
   const startBooking = (serviceId?: string) => {
+    setReschedulingAppointmentId(null);
     if (serviceId) {
       setBooking({ ...INITIAL_BOOKING, serviceId });
       nav('book-2');
@@ -191,6 +193,13 @@ export default function App() {
       setBooking(INITIAL_BOOKING);
       nav('book-1');
     }
+  };
+
+  const startRescheduling = (appointmentId: string, serviceId: string) => {
+    setSelectedAppointmentId(appointmentId);
+    setReschedulingAppointmentId(appointmentId);
+    setBooking({ ...INITIAL_BOOKING, serviceId });
+    nav('book-2');
   };
 
   const handleClientTab = (tab: ClientTab) => {
@@ -344,7 +353,15 @@ export default function App() {
         return (
           <BookStep4
             booking={booking}
+            appointmentId={reschedulingAppointmentId}
             onConfirm={code => {
+              if (reschedulingAppointmentId) {
+                setReschedulingAppointmentId(null);
+                setBooking(INITIAL_BOOKING);
+                setToastMessage('Cita reprogramada exitosamente');
+                nav('my-appointments');
+                return;
+              }
               setReservationCode(code);
               nav('book-success');
             }}
@@ -382,7 +399,7 @@ export default function App() {
           <MyAppointments
             onBook={() => startBooking()}
             onViewDetail={id => { setSelectedAppointmentId(id); nav('appointment-detail'); }}
-            onReschedule={(id, serviceId) => { setSelectedAppointmentId(id); startBooking(serviceId); }}
+            onReschedule={startRescheduling}
             onCancel={id => { setSelectedAppointmentId(id); nav('cancel-appointment'); }}
           />
         );
@@ -391,7 +408,7 @@ export default function App() {
         return selectedAppointmentId ? (
           <AppointmentDetail
             appointmentId={selectedAppointmentId}
-            onReschedule={() => startBooking()}
+            onReschedule={serviceId => startRescheduling(selectedAppointmentId, serviceId)}
             onCancel={() => nav('cancel-appointment')}
             onRebook={id => startBooking(id)}
             onBack={() => nav('my-appointments')}
@@ -402,7 +419,10 @@ export default function App() {
         return selectedAppointmentId ? (
           <CancelAppointment
             appointmentId={selectedAppointmentId}
-            onConfirm={() => nav('my-appointments')}
+            onConfirm={() => {
+              setToastMessage('Cita cancelada');
+              nav('my-appointments');
+            }}
             onBack={() => nav('my-appointments')}
           />
         ) : (() => { nav('my-appointments'); return null; })();

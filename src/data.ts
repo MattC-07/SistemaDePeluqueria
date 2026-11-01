@@ -325,9 +325,9 @@ export function formatDateShort(dateStr: string): string {
 }
 
 export const STATUS_CONFIG: Record<AppointmentStatus, { label: string; color: string; bg: string }> = {
-  confirmed: { label: 'Confirmada', color: '#4A7C59', bg: '#D4EDDA' },
+  confirmed: { label: 'Confirmada', color: '#255D38', bg: '#D4EDDA' },
   pending: { label: 'Pendiente', color: '#8B6914', bg: '#FFF3CD' },
-  cancelled: { label: 'Cancelada', color: '#C45C4C', bg: '#F8D7DA' },
+  cancelled: { label: 'Cancelada', color: '#8B2E24', bg: '#F8D7DA' },
   completed: { label: 'Completada', color: '#6B4226', bg: '#F5E6D3' },
 };
 

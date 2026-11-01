@@ -13,22 +13,25 @@ interface ButtonProps {
   fullWidth?: boolean;
   icon?: ReactNode;
   type?: 'button' | 'submit';
+  ariaLabel?: string;
+  ariaBusy?: boolean;
+  ariaDescribedBy?: string;
 }
 
-export function Button({ children, onClick, variant = 'primary', size = 'md', disabled, fullWidth, icon, type = 'button' }: ButtonProps) {
-  const base = 'inline-flex items-center justify-center gap-2 font-semibold transition-all duration-200 select-none rounded-[14px]';
+export function Button({ children, onClick, variant = 'primary', size = 'md', disabled, fullWidth, icon, type = 'button', ariaLabel, ariaBusy, ariaDescribedBy }: ButtonProps) {
+  const base = 'inline-flex items-center justify-center gap-2 font-semibold transition-all duration-200 motion-reduce:transition-none select-none rounded-[14px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#3D2415]';
 
   const variants = {
     primary: disabled
-      ? 'bg-[#E8C4B0] text-[#B8906A] cursor-not-allowed'
-      : 'bg-[#E8734A] text-white hover:bg-[#C85A31] active:scale-[0.97] shadow-[0_4px_16px_-2px_rgba(232,115,74,0.4)] cursor-pointer',
+      ? 'bg-[#E8C4B0] text-[#59351F] cursor-not-allowed'
+      : 'bg-[#A84425] text-white hover:bg-[#87371E] active:scale-[0.97] shadow-[0_4px_16px_-2px_rgba(135,55,30,0.3)] cursor-pointer',
     secondary: disabled
-      ? 'bg-[#F5E6D3] text-[#C8A88A] cursor-not-allowed border-2 border-[#EDD8BC]'
-      : 'bg-[#FBF3E9] text-[#E8734A] border-2 border-[#E8734A] hover:bg-[#F5E6D3] active:scale-[0.97] cursor-pointer',
+      ? 'bg-[#F5E6D3] text-[#59351F] cursor-not-allowed border-2 border-[#C8A88A]'
+      : 'bg-[#FBF3E9] text-[#87371E] border-2 border-[#87371E] hover:bg-[#F5E6D3] active:scale-[0.97] cursor-pointer',
     ghost: 'bg-transparent text-[#6B4226] hover:bg-[#F5E6D3] active:scale-[0.97] cursor-pointer',
     danger: disabled
-      ? 'bg-[#F8D7DA] text-[#C8A0A0] cursor-not-allowed'
-      : 'bg-[#C45C4C] text-white hover:bg-[#A84A3A] active:scale-[0.97] cursor-pointer',
+      ? 'bg-[#F8D7DA] text-[#64241D] cursor-not-allowed'
+      : 'bg-[#A83F32] text-white hover:bg-[#843126] active:scale-[0.97] cursor-pointer',
   };
 
   const sizes = {
@@ -42,6 +45,9 @@ export function Button({ children, onClick, variant = 'primary', size = 'md', di
       type={type}
       onClick={onClick}
       disabled={disabled}
+      aria-label={ariaLabel}
+      aria-busy={ariaBusy}
+      aria-describedby={ariaDescribedBy}
       className={`${base} ${variants[variant]} ${sizes[size]} ${fullWidth ? 'w-full' : ''}`}
     >
       {icon && <span className="shrink-0">{icon}</span>}
@@ -306,9 +312,11 @@ export function StatusBadge({ status }: { status: AppointmentStatus }) {
   return (
     <span
       className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold"
+      role="status"
+      aria-label={cfg.label}
       style={{ background: cfg.bg, color: cfg.color }}
     >
-      <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: cfg.color }} />
+      <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: cfg.color }} />
       {cfg.label}
     </span>
   );
@@ -568,8 +576,10 @@ export function PageHeader({ title, subtitle, onBack, action }: {
     <div className="flex items-center gap-3 px-5 py-4">
       {onBack && (
         <button
+          type="button"
           onClick={onBack}
-          className="w-10 h-10 rounded-full bg-white shadow-[0_2px_12px_rgba(107,66,38,0.1)] flex items-center justify-center text-[#6B4226] hover:bg-[#F5E6D3] transition-colors"
+          aria-label="Volver a la pantalla anterior"
+          className="w-10 h-10 rounded-full bg-white shadow-[0_2px_12px_rgba(107,66,38,0.1)] flex items-center justify-center text-[#6B4226] hover:bg-[#F5E6D3] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#3D2415]"
         >
           ←
         </button>

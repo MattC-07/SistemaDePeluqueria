@@ -10,11 +10,30 @@ const SERVER_TIME_ZONE = "America/Bogota";
 const LUNCH_BREAK = { start: 13 * 60, end: 14 * 60 };
 const ANY_STYLIST_ID = "any";
 const SESSION_KEY_USER_NAME = "bb_user_name";
+const MINIMUM_APPOINTMENT_NOTICE_MS = 2 * 60 * 60 * 1000;
 
 export class AppointmentAccessError extends Error {
   constructor(message = "No tienes permisos para consultar esta información.") {
     super(message);
     this.name = "AppointmentAccessError";
+  }
+}
+
+export type AppointmentActionErrorCode =
+  | "APPOINTMENT_NOT_FOUND"
+  | "APPOINTMENT_ALREADY_CANCELLED"
+  | "APPOINTMENT_ALREADY_COMPLETED"
+  | "APPOINTMENT_ALREADY_PASSED"
+  | "INSUFFICIENT_NOTICE"
+  | "INVALID_RESCHEDULE";
+
+export class AppointmentActionError extends Error {
+  constructor(
+    message: string,
+    public readonly code: AppointmentActionErrorCode,
+  ) {
+    super(message);
+    this.name = "AppointmentActionError";
   }
 }
 
@@ -104,7 +123,7 @@ const appointmentStatuses = new Set<Appointment["status"]>([
 ]);
 
 function parseTestAppointment(value: string): Appointment | null {
-  const [id, clientName, serviceId, stylistId, date, time, status, createdAt] = value.split("|");
+  const [id, clientName, serviceId, stylistId, date, time, status, createdAt, notes] = value.split("|");
   if (!id || !clientName || !serviceId || !stylistId || !date || !time || !appointmentStatuses.has(status as Appointment["status"])) {
     return null;
   }
@@ -117,6 +136,7 @@ function parseTestAppointment(value: string): Appointment | null {
     time,
     status: status as Appointment["status"],
     ...(createdAt ? { createdAt } : {}),
+    ...(notes ? { notes } : {}),
   };
 }
 
@@ -130,6 +150,7 @@ function serializeTestAppointment(appointment: Appointment): string {
     appointment.time,
     appointment.status,
     appointment.createdAt ?? new Date().toISOString(),
+    appointment.notes ?? "",
   ].join("|");
 }
 
@@ -492,6 +513,69 @@ function assertAppointmentOwner(appointment: Appointment, userName?: string): vo
   }
 }
 
+function getAppointmentStartTimestamp(appointment: Pick<Appointment, "date" | "time">): number {
+  return new Date(`${appointment.date}T${appointment.time}:00-05:00`).getTime();
+}
+
+export function canManageAppointment(
+  appointment: Pick<Appointment, "date" | "time" | "status">,
+  now = Date.now(),
+): boolean {
+  return (
+    (appointment.status === "confirmed" || appointment.status === "pending") &&
+    getAppointmentStartTimestamp(appointment) - now >= MINIMUM_APPOINTMENT_NOTICE_MS
+  );
+}
+
+function assertAppointmentCanBeManaged(appointment: Appointment, now = Date.now()): void {
+  if (appointment.status === "cancelled") {
+    throw new AppointmentActionError("Esta cita ya fue cancelada.", "APPOINTMENT_ALREADY_CANCELLED");
+  }
+  if (appointment.status === "completed") {
+    throw new AppointmentActionError("No se puede gestionar una cita completada.", "APPOINTMENT_ALREADY_COMPLETED");
+  }
+  const startsAt = getAppointmentStartTimestamp(appointment);
+  if (startsAt <= now) {
+    throw new AppointmentActionError("No se puede gestionar una cita que ya comenzó o pasó.", "APPOINTMENT_ALREADY_PASSED");
+  }
+  if (startsAt - now < MINIMUM_APPOINTMENT_NOTICE_MS) {
+    throw new AppointmentActionError(
+      "Para cambios con menos de 2 horas de anticipación, comunícate directamente por teléfono con la peluquería.",
+      "INSUFFICIENT_NOTICE",
+    );
+  }
+}
+
+function getStoredAppointment(appointmentId: string): Appointment | undefined {
+  return [...APPOINTMENTS, ...getTestAppointments()].find(candidate => candidate.id === appointmentId);
+}
+
+function persistAppointment(appointment: Appointment): void {
+  const testAppointmentIndex = testAppointmentStrings.findIndex(value => value.startsWith(`${appointment.id}|`));
+  if (testAppointmentIndex >= 0) {
+    testAppointmentStrings[testAppointmentIndex] = serializeTestAppointment(appointment);
+    return;
+  }
+  const storedAppointment = APPOINTMENTS.find(candidate => candidate.id === appointment.id);
+  if (!storedAppointment) {
+    throw new AppointmentActionError("No encontramos la cita que quieres gestionar.", "APPOINTMENT_NOT_FOUND");
+  }
+  Object.assign(storedAppointment, appointment);
+}
+
+function releaseAppointmentReservation(appointment: Appointment): void {
+  for (const [id, reservation] of reservations) {
+    if (
+      reservation.date === appointment.date &&
+      reservation.time === appointment.time &&
+      reservation.stylistId === appointment.stylistId &&
+      reservation.status === "confirmed"
+    ) {
+      reservations.delete(id);
+    }
+  }
+}
+
 export async function getMyAppointments(userName?: string): Promise<Appointment[]> {
   const activeUser = getAuthenticatedUserName(userName);
   await delay(MOCK_API_DELAY_MS);
@@ -534,27 +618,92 @@ export async function getMyAppointment(appointmentId: string, userName?: string)
   return { ...appointment };
 }
 
-export async function cancelMyAppointment(appointmentId: string, userName?: string): Promise<void> {
-  const appointment = [...APPOINTMENTS, ...getTestAppointments()].find(candidate => candidate.id === appointmentId);
-  if (!appointment) throw new AppointmentAccessError();
-  assertAppointmentOwner(appointment, userName);
-  await delay(MOCK_API_DELAY_MS);
-  const testAppointmentIndex = testAppointmentStrings.findIndex(value => value.startsWith(`${appointmentId}|`));
-  if (testAppointmentIndex >= 0) {
-    testAppointmentStrings[testAppointmentIndex] = serializeTestAppointment({
-      ...appointment,
-      status: "cancelled",
-    });
-    return;
+export async function cancelMyAppointment(appointmentId: string, userName?: string, reason?: string): Promise<Appointment> {
+  getAuthenticatedUserName(userName);
+  const appointment = getStoredAppointment(appointmentId);
+  if (!appointment) {
+    throw new AppointmentActionError("No encontramos la cita que quieres cancelar.", "APPOINTMENT_NOT_FOUND");
   }
-  const storedAppointment = APPOINTMENTS.find(candidate => candidate.id === appointmentId);
-  if (storedAppointment) storedAppointment.status = "cancelled";
+  assertAppointmentOwner(appointment, userName);
+  assertAppointmentCanBeManaged(appointment);
+  await delay(MOCK_API_DELAY_MS);
+  const currentAppointment = getStoredAppointment(appointmentId);
+  if (!currentAppointment) {
+    throw new AppointmentActionError("No encontramos la cita que quieres cancelar.", "APPOINTMENT_NOT_FOUND");
+  }
+  assertAppointmentOwner(currentAppointment, userName);
+  assertAppointmentCanBeManaged(currentAppointment);
+  const cancelledAppointment = {
+    ...currentAppointment,
+    status: "cancelled" as const,
+    ...(reason?.trim() ? { notes: reason.trim() } : {}),
+  };
+  persistAppointment(cancelledAppointment);
+  releaseAppointmentReservation(appointment);
+  return { ...cancelledAppointment };
 }
 
 export async function requestAppointmentReschedule(appointmentId: string, userName?: string): Promise<Appointment> {
   const appointment = await getMyAppointment(appointmentId, userName);
-  if (appointment.status === "completed" || appointment.status === "cancelled") {
-    throw new Error("Esta cita no se puede reprogramar.");
-  }
+  assertAppointmentCanBeManaged(appointment);
   return appointment;
+}
+
+export async function rescheduleMyAppointment(
+  appointmentId: string,
+  slot: Pick<Appointment, "date" | "time" | "stylistId">,
+  holdId: string,
+  userName?: string,
+): Promise<Appointment> {
+  getAuthenticatedUserName(userName);
+  const appointment = getStoredAppointment(appointmentId);
+  if (!appointment) {
+    throw new AppointmentActionError("No encontramos la cita que quieres reprogramar.", "APPOINTMENT_NOT_FOUND");
+  }
+  assertAppointmentOwner(appointment, userName);
+  assertAppointmentCanBeManaged(appointment);
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(slot.date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(slot.time) ||
+      !Number.isFinite(getAppointmentStartTimestamp(slot)) || getAppointmentStartTimestamp(slot) <= Date.now()) {
+    throw new AppointmentActionError("Selecciona una fecha y hora futura válida.", "INVALID_RESCHEDULE");
+  }
+
+  await delay(MOCK_API_DELAY_MS);
+  const currentAppointment = getStoredAppointment(appointmentId);
+  if (!currentAppointment) {
+    throw new AppointmentActionError("No encontramos la cita que quieres reprogramar.", "APPOINTMENT_NOT_FOUND");
+  }
+  assertAppointmentOwner(currentAppointment, userName);
+  assertAppointmentCanBeManaged(currentAppointment);
+
+  const hold = reservations.get(holdId);
+  const service = getService(currentAppointment.serviceId);
+  if (
+    !hold ||
+    hold.status !== "held" ||
+    hold.expiresAt <= Date.now() ||
+    hold.date !== slot.date ||
+    hold.time !== slot.time ||
+    hold.stylistId !== slot.stylistId ||
+    !service ||
+    hold.duration !== service.duration
+  ) {
+    throw new BookingServiceError(
+      "El bloqueo de esta franja ya no está activo. Vuelve a seleccionar un horario.",
+      404,
+      "HOLD_NOT_FOUND",
+    );
+  }
+
+  const updatedAppointment: Appointment = {
+    ...currentAppointment,
+    date: slot.date,
+    time: slot.time,
+    stylistId: slot.stylistId,
+  };
+  persistAppointment(updatedAppointment);
+  releaseAppointmentReservation(currentAppointment);
+  hold.status = "confirmed";
+  hold.expiresAt = Number.POSITIVE_INFINITY;
+  return { ...updatedAppointment };
 }
